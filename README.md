@@ -6,8 +6,6 @@ Home Assistant custom integration for controlling [LEDFX](https://www.ledfx.app/
 
 ## Features
 
--  Full RGB color control
--  Brightness adjustment (0-255)
 -  Audio-reactive effects (energy, power, scroll, etc.)
 - Static effects (gradient, rainbow, fade, etc.)
 -  8 pre-configured gradient presets (Rainbow, Fire, Ocean, Sunset, etc.)
