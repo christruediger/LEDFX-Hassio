@@ -6,13 +6,13 @@ Home Assistant custom integration for controlling [LEDFX](https://www.ledfx.app/
 
 ## Features
 
-- 🎨 Full RGB color control
-- 💡 Brightness adjustment (0-255)
-- 🎵 Audio-reactive effects (energy, power, scroll, etc.)
-- 🌈 Static effects (gradient, rainbow, fade, etc.)
-- 🎨 8 pre-configured gradient presets (Rainbow, Fire, Ocean, Sunset, etc.)
-- 🔌 Device online/offline status monitoring
-- ⚡ Real-time state synchronization
+-  Full RGB color control
+-  Brightness adjustment (0-255)
+-  Audio-reactive effects (energy, power, scroll, etc.)
+- Static effects (gradient, rainbow, fade, etc.)
+-  8 pre-configured gradient presets (Rainbow, Fire, Ocean, Sunset, etc.)
+-  Device online/offline status monitoring
+-  Real-time state synchronization
 
 ## Installation
 
@@ -54,16 +54,16 @@ For each LEDFX virtual, the integration creates:
 
 ## Gradient Presets
 
-The integration includes 8 beautiful gradient presets:
+The integration includes 8 gradient presets (directly from LEDFX):
 
-- 🌈 **Rainbow** - Classic rainbow spectrum
-- 🔥 **Fire** - Red-orange-yellow fire effect
-- 🌊 **Ocean** - Blue-turquoise-green ocean waves
-- 🌅 **Sunset** - Orange-pink-purple sunset
-- 💜 **Purple Dream** - Purple-pink dreamy colors
-- 🌲 **Forest** - Various shades of green
-- ❄️ **Ice** - Light blue to white icy colors
-- 🌋 **Lava** - Dark red to orange lava flow
+-  **Rainbow** - Classic rainbow spectrum
+-  **Fire** - Red-orange-yellow fire effect
+-  **Ocean** - Blue-turquoise-green ocean waves
+-  **Sunset** - Orange-pink-purple sunset
+-  **Purple Dream** - Purple-pink dreamy colors
+-  **Forest** - Various shades of green
+-  **Ice** - Light blue to white icy colors
+-  **Lava** - Dark red to orange lava flow
 
 ## Usage Examples
 
@@ -190,4 +190,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Credits
 
-Developed for the Home Assistant community.
+Developed using AI and a bit of my own brain for the Home Assistant community.
