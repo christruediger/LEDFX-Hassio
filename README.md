@@ -22,7 +22,7 @@ Home Assistant custom integration for controlling [LEDFX](https://www.ledfx.app/
 2. Go to "Integrations"
 3. Click the three dots in the top right corner
 4. Select "Custom repositories"
-5. Add this repository URL: `https://github.com/YOUR-USERNAME/ledfx-homeassistant`
+5. Add this repository URL: `(https://github.com/christruediger/LEDFX-Hassio)`
 6. Select category: "Integration"
 7. Click "Add"
 8. Search for "LEDFX" in HACS
