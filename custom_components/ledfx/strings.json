@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LEDFX Setup",
+        "description": "Enter the connection details for your LEDFX server.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to LEDFX server",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "This LEDFX server is already configured"
+    }
+  }
+}

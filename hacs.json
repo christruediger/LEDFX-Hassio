@@ -1,0 +1,8 @@
+{
+  "name": "LEDFX",
+  "content_in_root": false,
+  "filename": "ledfx",
+  "homeassistant": "2023.1.0",
+  "render_readme": true,
+  "domains": ["light", "select"]
+}

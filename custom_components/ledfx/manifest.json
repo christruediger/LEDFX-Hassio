@@ -1,0 +1,11 @@
+{
+  "domain": "ledfx",
+  "name": "LEDFX",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/ledfx-homeassistant",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": ["aiohttp>=3.8.0"],
+  "version": "0.1.0"
+}
