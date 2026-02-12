@@ -3,9 +3,10 @@
   "name": "LEDFX",
   "codeowners": [],
   "config_flow": true,
-  "documentation": "https://github.com/yourusername/ledfx-homeassistant",
+  "documentation": "https://github.com/YOUR-USERNAME/ledfx-homeassistant",
+  "issue_tracker": "https://github.com/YOUR-USERNAME/ledfx-homeassistant/issues",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "requirements": ["aiohttp>=3.8.0"],
-  "version": "0.1.0"
+  "version": "1.0.0"
 }
