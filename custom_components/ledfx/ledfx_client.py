@@ -110,3 +110,18 @@ class LEDFXClient:
         except aiohttp.ClientError as err:
             _LOGGER.error("Error getting effects: %s", err)
             raise
+
+    async def update_virtual_config(
+        self, virtual_id: str, config: dict[str, Any]
+    ) -> bool:
+        """Update virtual configuration (e.g. max_brightness)."""
+        try:
+            async with self.session.put(
+                f"{self.base_url}/api/virtuals/{virtual_id}",
+                json={"config": config},
+            ) as response:
+                response.raise_for_status()
+                return True
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Error updating virtual config %s: %s", virtual_id, err)
+            return False

@@ -9,7 +9,11 @@ CONF_PORT = "port"
 
 # Defaults
 DEFAULT_PORT = 8888
-DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
+DEFAULT_SCAN_INTERVAL = timedelta(seconds=5)
+
+# Keys for storing data in hass.data
+COLOR_LOCKS_KEY = "color_locks"
+EFFECTS_SCHEMA_KEY = "effects_schema"
 
 # API Endpoints
 API_INFO = "/api/info"

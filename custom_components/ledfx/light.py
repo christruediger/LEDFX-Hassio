@@ -1,7 +1,8 @@
-"""Support for LEDFX lights."""
+"""Support for LEDFX as light entities with RGB color control."""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.light import (
@@ -16,14 +17,109 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
-    UpdateFailed,
 )
 
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
+from .const import COLOR_LOCKS_KEY, DOMAIN, EFFECTS_SCHEMA_KEY
 from .ledfx_client import LEDFXClient
 
 _LOGGER = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Color utility helpers
+# ---------------------------------------------------------------------------
+
+def rgb_to_gradient(r: int, g: int, b: int) -> str:
+    """Create a monochromatic gradient from a single RGB color.
+
+    Produces a dark → full → light → full sweep so the hue is unmistakably
+    the chosen color while still giving depth to animated effects.
+    """
+    r_dark = max(0, int(r * 0.45))
+    g_dark = max(0, int(g * 0.45))
+    b_dark = max(0, int(b * 0.45))
+    r_light = min(255, r + int((255 - r) * 0.45))
+    g_light = min(255, g + int((255 - g) * 0.45))
+    b_light = min(255, b + int((255 - b) * 0.45))
+    return (
+        f"linear-gradient(90deg, "
+        f"rgb({r_dark},{g_dark},{b_dark}) 0%, "
+        f"rgb({r},{g},{b}) 35%, "
+        f"rgb({r_light},{g_light},{b_light}) 65%, "
+        f"rgb({r},{g},{b}) 100%)"
+    )
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    """Parse '#rrggbb' or 'rrggbb' to (r, g, b)."""
+    hex_color = hex_color.strip().lstrip("#")
+    if len(hex_color) == 6:
+        try:
+            return (
+                int(hex_color[0:2], 16),
+                int(hex_color[2:4], 16),
+                int(hex_color[4:6], 16),
+            )
+        except ValueError:
+            pass
+    return None
+
+
+def extract_rgb_from_gradient(gradient: str) -> tuple[int, int, int] | None:
+    """Extract the dominant (first) color from a CSS gradient string."""
+    match = re.search(r"rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", gradient)
+    if match:
+        return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    return None
+
+
+def apply_color_to_config(
+    rgb: tuple[int, int, int],
+    effect_schema: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply the main color to an effect config, respecting its parameter schema."""
+    r, g, b = rgb
+    result = config.copy()
+    props = effect_schema.get("schema", {}).get("properties", {})
+
+    if "gradient" in props:
+        result["gradient"] = rgb_to_gradient(r, g, b)
+
+    if "color" in props:
+        result["color"] = rgb_to_hex(r, g, b)
+
+    # Multi-band color effects (energy, scroll, rain, …)
+    r_hi = min(255, r + int((255 - r) * 0.4))
+    g_hi = min(255, g + int((255 - g) * 0.4))
+    b_hi = min(255, b + int((255 - b) * 0.4))
+    r_lo = max(0, int(r * 0.65))
+    g_lo = max(0, int(g * 0.65))
+    b_lo = max(0, int(b * 0.65))
+
+    for key, rv, gv, bv in [
+        ("color_high", r_hi, g_hi, b_hi),
+        ("color_lows", r_lo, g_lo, b_lo),
+        ("color_mids", r, g, b),
+        ("lows_color", r_lo, g_lo, b_lo),
+        ("mids_color", r, g, b),
+        ("high_color", r_hi, g_hi, b_hi),
+        ("color_low", r_lo, g_lo, b_lo),
+        ("color_mid", r, g, b),
+    ]:
+        if key in props:
+            result[key] = rgb_to_hex(rv, gv, bv)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Entity setup
+# ---------------------------------------------------------------------------
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -32,62 +128,58 @@ async def async_setup_entry(
 ) -> None:
     """Set up LEDFX light entities."""
     client: LEDFXClient = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = hass.data[DOMAIN][f"{config_entry.entry_id}_coordinator"]
 
-    async def async_update_data() -> dict[str, Any]:
-        """Fetch data from LEDFX."""
-        try:
-            return await client.get_virtuals()
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with LEDFX: {err}") from err
-
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name="ledfx",
-        update_method=async_update_data,
-        update_interval=DEFAULT_SCAN_INTERVAL,
-    )
-
-    await coordinator.async_config_entry_first_refresh()
-    
-    # Store coordinator for use by other platforms
-    hass.data[DOMAIN][f"{config_entry.entry_id}_coordinator"] = coordinator
+    try:
+        devices = await client.get_devices()
+    except Exception as err:
+        _LOGGER.error("Failed to get devices: %s", err)
+        devices = {}
 
     entities = []
     for virtual_id, virtual_data in coordinator.data.items():
-        entities.append(LEDFXLight(coordinator, client, virtual_id, virtual_data))
+        device_id = virtual_data.get("is_device")
+        device_online = (
+            devices.get(device_id, {}).get("online", True) if device_id else True
+        )
+        entities.append(
+            LEDFXLight(coordinator, client, config_entry.entry_id, virtual_id, virtual_data, device_online)
+        )
 
     async_add_entities(entities)
 
 
-def get_coordinator(hass: HomeAssistant, entry_id: str) -> DataUpdateCoordinator | None:
-    """Get the coordinator for an entry."""
-    return hass.data[DOMAIN].get(f"{entry_id}_coordinator")
-
-
 class LEDFXLight(CoordinatorEntity, LightEntity):
-    """Representation of a LEDFX light."""
+    """LEDFX virtual represented as a Home Assistant light.
+
+    Supports on/off, brightness (maps to max_brightness), and RGB color.
+    The chosen color is stored as a "color lock" so that every subsequent
+    effect change automatically inherits it.
+    """
 
     _attr_has_entity_name = True
     _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_supported_color_modes: set[ColorMode] = {ColorMode.RGB}
 
     def __init__(
         self,
         coordinator: DataUpdateCoordinator,
         client: LEDFXClient,
+        entry_id: str,
         virtual_id: str,
         virtual_data: dict[str, Any],
+        device_online: bool,
     ) -> None:
-        """Initialize the light."""
         super().__init__(coordinator)
         self._client = client
+        self._entry_id = entry_id
         self._virtual_id = virtual_id
-        self._attr_unique_id = f"ledfx_{virtual_id}"
+        self._device_online = device_online
+
+        self._attr_unique_id = f"ledfx_{virtual_id}_light"
+        self._attr_name = "Licht"
+
         virtual_name = virtual_data.get("config", {}).get("name", virtual_id)
-        self._attr_name = virtual_name
-        
-        # Device info for grouping with select entity
         self._attr_device_info = {
             "identifiers": {(DOMAIN, virtual_id)},
             "name": virtual_name,
@@ -95,96 +187,101 @@ class LEDFXLight(CoordinatorEntity, LightEntity):
             "model": "Virtual LED",
         }
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     @property
-    def virtual_data(self) -> dict[str, Any]:
-        """Return virtual data from coordinator."""
+    def _virtual_data(self) -> dict[str, Any]:
         return self.coordinator.data.get(self._virtual_id, {})
 
     @property
-    def is_on(self) -> bool:
-        """Return true if light is on."""
-        # Virtual is on if active=true
-        return self.virtual_data.get("active", False)
+    def _color_locks(self) -> dict:
+        return self.hass.data[DOMAIN].get(COLOR_LOCKS_KEY, {})
+
+    def _set_color_lock(self, rgb: tuple[int, int, int]) -> None:
+        self.hass.data[DOMAIN].setdefault(COLOR_LOCKS_KEY, {})[self._virtual_id] = rgb
+
+    def _clear_color_lock(self) -> None:
+        self.hass.data[DOMAIN].get(COLOR_LOCKS_KEY, {}).pop(self._virtual_id, None)
+
+    # ------------------------------------------------------------------
+    # State properties
+    # ------------------------------------------------------------------
 
     @property
-    def brightness(self) -> int | None:
-        """Return the brightness of the light."""
-        effect_config = self.virtual_data.get("effect", {}).get("config", {})
-        brightness = effect_config.get("brightness", 1.0)
-        # LEDFX brightness is 0.0-1.0, HA expects 0-255
-        return int(brightness * 255)
+    def is_on(self) -> bool:
+        return self._virtual_data.get("active", False)
+
+    @property
+    def brightness(self) -> int:
+        max_b = self._virtual_data.get("config", {}).get("max_brightness", 1.0)
+        return int(max_b * 255)
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
-        """Return the RGB color value."""
-        effect_config = self.virtual_data.get("effect", {}).get("config", {})
-        
-        # First try to parse gradient (for solid colors set by HA)
+        # 1. Prefer locked color
+        locked = self._color_locks.get(self._virtual_id)
+        if locked:
+            return locked
+
+        # 2. Extract from active effect
+        effect_config = self._virtual_data.get("effect", {}).get("config", {})
         if "gradient" in effect_config:
-            gradient = effect_config["gradient"]
-            # Parse: linear-gradient(90deg, rgb(255, 0, 0) 0%, rgb(255, 0, 0) 100%)
-            # Extract first rgb() value
-            import re
-            match = re.search(r'rgb\((\d+),\s*(\d+),\s*(\d+)\)', gradient)
-            if match:
-                return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-        
-        # Fallback to color property
+            return extract_rgb_from_gradient(effect_config["gradient"])
         if "color" in effect_config:
-            color = effect_config["color"]
-            if isinstance(color, list) and len(color) == 3:
-                return tuple(color)
-            elif isinstance(color, str):
-                # Parse hex color if needed
-                color = color.lstrip("#")
-                if len(color) == 6:
-                    return tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
-        
+            return hex_to_rgb(effect_config["color"])
+        if "color_lows" in effect_config:
+            return hex_to_rgb(effect_config["color_lows"])
+
         return None
 
+    @property
+    def available(self) -> bool:
+        return self._device_online
+
+    @property
+    def _effects_data(self) -> dict[str, Any]:
+        """Return cached effects schema – loaded once at integration startup."""
+        return self.hass.data[DOMAIN].get(EFFECTS_SCHEMA_KEY, {})
+
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on the light."""
-        effect_config = {}
-        
-        # Get current effect or use last_effect or default
-        current_effect = self.virtual_data.get("effect", {})
-        effect_type = current_effect.get("type")
-        is_active = self.virtual_data.get("active", False)
-        
-        # If no current effect, try last_effect
-        if not effect_type:
-            effect_type = self.virtual_data.get("last_effect", "gradient")
-        
-        if current_effect.get("config"):
-            effect_config = current_effect["config"].copy()
+        """Turn on the virtual, optionally with a new RGB color or brightness."""
+        brightness: int | None = kwargs.get(ATTR_BRIGHTNESS)
+        rgb: tuple[int, int, int] | None = kwargs.get(ATTR_RGB_COLOR)
 
-        # Update brightness if provided
-        if ATTR_BRIGHTNESS in kwargs:
-            brightness = kwargs[ATTR_BRIGHTNESS] / 255.0  # Convert to 0.0-1.0
-            effect_config["brightness"] = brightness
+        # Update virtual brightness
+        if brightness is not None:
+            await self._client.update_virtual_config(
+                self._virtual_id, {"max_brightness": round(brightness / 255, 3)}
+            )
 
-        # Update color if provided
-        if ATTR_RGB_COLOR in kwargs:
-            rgb = kwargs[ATTR_RGB_COLOR]
-            r, g, b = rgb
-            # Set gradient to solid color (same color at 0% and 100%)
-            gradient = f"linear-gradient(90deg, rgb({r}, {g}, {b}) 0%, rgb({r}, {g}, {b}) 100%)"
-            effect_config["gradient"] = gradient
-            # Also set color for effects that use it
-            effect_config["color"] = list(rgb)
+        # Persist color lock
+        if rgb is not None:
+            self._set_color_lock(rgb)
 
-        # If not active, use POST to set new effect
-        # If active and we're changing color/brightness, use PUT to update
-        if not is_active:
-            # POST - set new effect
-            await self._client.set_virtual_effect(self._virtual_id, effect_type, effect_config)
-        elif ATTR_BRIGHTNESS in kwargs or ATTR_RGB_COLOR in kwargs:
-            # PUT - update existing effect config (needs type too!)
-            await self._client.update_virtual_effect(self._virtual_id, effect_type, effect_config)
+        # Determine which effect to activate
+        effect_data = self._virtual_data.get("effect", {})
+        effect_type = effect_data.get("type") or self._virtual_data.get("last_effect", "singleColor")
+        config = effect_data.get("config", {}).copy()
 
+        # Apply color (new or existing lock) to the effect config
+        active_rgb = rgb or self._color_locks.get(self._virtual_id)
+        if active_rgb and effect_type in self._effects_data:
+            config = apply_color_to_config(active_rgb, self._effects_data[effect_type], config)
+        elif active_rgb and not self._effects_data:
+            # Fallback if effects schema not loaded: just use singleColor
+            effect_type = "singleColor"
+            config = {"color": rgb_to_hex(*active_rgb)}
+
+        await self._client.set_virtual_effect(self._virtual_id, effect_type, config)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn off the light."""
+        """Turn off the virtual (clear active effect)."""
         await self._client.clear_virtual_effect(self._virtual_id)
         await self.coordinator.async_request_refresh()

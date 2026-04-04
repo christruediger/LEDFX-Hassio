@@ -11,12 +11,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_HOST, CONF_PORT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import CONF_HOST, CONF_PORT, COLOR_LOCKS_KEY, DEFAULT_SCAN_INTERVAL, DOMAIN, EFFECTS_SCHEMA_KEY
 from .ledfx_client import LEDFXClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SELECT]
+PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SELECT, Platform.LIGHT, Platform.NUMBER]
 
 
 def should_include_virtual(virtual_id: str, virtual_data: dict) -> bool:
@@ -67,9 +67,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
+    # Load effects schema once and cache it — avoids repeated API calls from every entity
+    try:
+        effects_schema = await client.get_effects()
+    except Exception:
+        effects_schema = {}
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = client
     hass.data[DOMAIN][f"{entry.entry_id}_coordinator"] = coordinator
+    # Initialize color locks storage: virtual_id -> (r, g, b) tuple
+    hass.data[DOMAIN].setdefault(COLOR_LOCKS_KEY, {})
+    # Cache effects schema so all entities can read it without extra API calls
+    hass.data[DOMAIN][EFFECTS_SCHEMA_KEY] = effects_schema
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

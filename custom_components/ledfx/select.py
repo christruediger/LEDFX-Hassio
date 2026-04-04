@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
-from .const import DOMAIN, GRADIENT_PRESETS, AUDIO_REACTIVE_CATEGORIES, NON_REACTIVE_CATEGORIES
+from .const import COLOR_LOCKS_KEY, DOMAIN, EFFECTS_SCHEMA_KEY, GRADIENT_PRESETS, AUDIO_REACTIVE_CATEGORIES, NON_REACTIVE_CATEGORIES
 from .ledfx_client import LEDFXClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,13 +67,13 @@ async def async_setup_entry(
         # Get device status
         device_id = virtual_data.get("is_device")
         device_online = devices.get(device_id, {}).get("online", True) if device_id else True
-        
+
         # Add audio-reactive effect selector
-        entities.append(LEDFXEffectSelect(coordinator, client, virtual_id, virtual_data, device_online, is_reactive=True))
+        entities.append(LEDFXEffectSelect(coordinator, client, config_entry.entry_id, virtual_id, virtual_data, device_online, is_reactive=True))
         # Add non-reactive effect selector
-        entities.append(LEDFXEffectSelect(coordinator, client, virtual_id, virtual_data, device_online, is_reactive=False))
+        entities.append(LEDFXEffectSelect(coordinator, client, config_entry.entry_id, virtual_id, virtual_data, device_online, is_reactive=False))
         # Add gradient selector
-        entities.append(LEDFXGradientSelect(coordinator, client, virtual_id, virtual_data, device_online))
+        entities.append(LEDFXGradientSelect(coordinator, client, config_entry.entry_id, virtual_id, virtual_data, device_online))
 
     async_add_entities(entities)
 
@@ -87,6 +87,7 @@ class LEDFXEffectSelect(CoordinatorEntity, SelectEntity):
         self,
         coordinator: DataUpdateCoordinator,
         client: LEDFXClient,
+        entry_id: str,
         virtual_id: str,
         virtual_data: dict[str, Any],
         device_online: bool,
@@ -95,6 +96,7 @@ class LEDFXEffectSelect(CoordinatorEntity, SelectEntity):
         """Initialize the select."""
         super().__init__(coordinator)
         self._client = client
+        self._entry_id = entry_id
         self._virtual_id = virtual_id
         self._is_reactive = is_reactive
         
@@ -127,40 +129,21 @@ class LEDFXEffectSelect(CoordinatorEntity, SelectEntity):
         return self.coordinator.data.get(self._virtual_id, {})
 
     async def async_added_to_hass(self) -> None:
-        """When entity is added to hass."""
+        """When entity is added to hass, build options from cached schema."""
         await super().async_added_to_hass()
-        await self._update_available_effects()
-        # Do initial update to get current effect
-        await self.async_update()
+        self._build_options_from_cache()
 
-    async def _update_available_effects(self) -> None:
-        """Fetch available effects from LEDFX and filter by category."""
-        try:
-            effects = await self._client.get_effects()
-            self._effects_data = effects
-            
-            # Filter effects based on is_reactive flag
-            filtered_effects = {}
-            for effect_name, effect_data in effects.items():
-                category = effect_data.get("category", "")
-                
-                if self._is_reactive:
-                    # Include audio-reactive categories
-                    if category in AUDIO_REACTIVE_CATEGORIES:
-                        filtered_effects[effect_name] = effect_data
-                else:
-                    # Include non-reactive categories
-                    if category in NON_REACTIVE_CATEGORIES:
-                        filtered_effects[effect_name] = effect_data
-            
-            # Create a sorted list of filtered effect names
-            self._effects_list = sorted(filtered_effects.keys())
-            self._attr_options = self._effects_list
-            
-        except Exception as err:
-            _LOGGER.error("Error fetching effects: %s", err)
-            self._effects_list = []
-            self._attr_options = []
+    def _build_options_from_cache(self) -> None:
+        """Filter available effects using the schema cached at startup."""
+        effects = self.hass.data[DOMAIN].get(EFFECTS_SCHEMA_KEY, {})
+        self._effects_data = effects
+        filtered = [
+            name for name, info in effects.items()
+            if (self._is_reactive and info.get("category", "") in AUDIO_REACTIVE_CATEGORIES)
+            or (not self._is_reactive and info.get("category", "") in NON_REACTIVE_CATEGORIES)
+        ]
+        self._effects_list = sorted(filtered)
+        self._attr_options = self._effects_list
     
     @property
     def options(self) -> list[str]:
@@ -192,34 +175,28 @@ class LEDFXEffectSelect(CoordinatorEntity, SelectEntity):
         pass
 
     async def async_select_option(self, option: str) -> None:
-        """Change the selected effect."""
+        """Change the selected effect, preserving any locked color."""
         try:
-            # Get current virtual state to preserve settings
-            current_config = {}
-            
-            if self.virtual_data.get("effect", {}).get("config"):
-                current_config = self.virtual_data["effect"]["config"].copy()
-            
-            # Get default config for the new effect
             effect_schema = self._effects_data.get(option, {})
-            default_config = {}
-            
-            # Build default config from schema
-            if "schema" in effect_schema:
-                schema = effect_schema["schema"]
-                for key, value in schema.items():
-                    if isinstance(value, dict) and "default" in value:
-                        default_config[key] = value["default"]
-            
-            # Merge: prefer current settings, fall back to defaults
-            final_config = {**default_config, **current_config}
-            
-            # Set the new effect (this will activate the virtual)
+
+            # Build defaults from schema properties
+            default_config: dict[str, Any] = {}
+            props = effect_schema.get("schema", {}).get("properties", {})
+            for key, meta in props.items():
+                if isinstance(meta, dict) and "default" in meta:
+                    default_config[key] = meta["default"]
+
+            final_config = default_config.copy()
+
+            # Apply locked color so the main color persists across effect changes
+            locked_rgb = self.hass.data[DOMAIN].get(COLOR_LOCKS_KEY, {}).get(self._virtual_id)
+            if locked_rgb:
+                from .light import apply_color_to_config
+                final_config = apply_color_to_config(locked_rgb, effect_schema, final_config)
+
             await self._client.set_virtual_effect(self._virtual_id, option, final_config)
-            
-            # Trigger coordinator refresh to update all entities
             await self.coordinator.async_request_refresh()
-            
+
         except Exception as err:
             _LOGGER.error("Error setting effect %s: %s", option, err)
 
@@ -238,6 +215,7 @@ class LEDFXGradientSelect(CoordinatorEntity, SelectEntity):
         self,
         coordinator: DataUpdateCoordinator,
         client: LEDFXClient,
+        entry_id: str,
         virtual_id: str,
         virtual_data: dict[str, Any],
         device_online: bool,
@@ -245,6 +223,7 @@ class LEDFXGradientSelect(CoordinatorEntity, SelectEntity):
         """Initialize the select."""
         super().__init__(coordinator)
         self._client = client
+        self._entry_id = entry_id
         self._virtual_id = virtual_id
         self._attr_unique_id = f"ledfx_{virtual_id}_gradient"
         self._attr_name = "Gradient"
@@ -293,26 +272,22 @@ class LEDFXGradientSelect(CoordinatorEntity, SelectEntity):
         pass
 
     async def async_select_option(self, option: str) -> None:
-        """Change the selected gradient preset."""
+        """Change the selected gradient preset and clear any color lock."""
         try:
-            # Get current effect
+            # Selecting a gradient preset explicitly overrides the color lock
+            self.hass.data[DOMAIN].get(COLOR_LOCKS_KEY, {}).pop(self._virtual_id, None)
+
             effect = self.virtual_data.get("effect", {})
             effect_type = effect.get("type")
-            
             if not effect_type:
-                _LOGGER.warning("No active effect for virtual %s, using last_effect", self._virtual_id)
                 effect_type = self.virtual_data.get("last_effect", "gradient")
-            
-            # Get current config and update gradient
+
             effect_config = effect.get("config", {}).copy()
             effect_config["gradient"] = GRADIENT_PRESETS[option]
-            
-            # Apply the updated effect with new gradient (this will activate if off)
+
             await self._client.set_virtual_effect(self._virtual_id, effect_type, effect_config)
-            
-            # Trigger coordinator refresh to update all entities
             await self.coordinator.async_request_refresh()
-            
+
         except Exception as err:
             _LOGGER.error("Error setting gradient %s: %s", option, err)
 

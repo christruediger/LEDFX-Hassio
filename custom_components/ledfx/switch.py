@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
-from .const import DOMAIN
+from .const import COLOR_LOCKS_KEY, DOMAIN
 from .ledfx_client import LEDFXClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,22 +87,27 @@ class LEDFXSwitch(CoordinatorEntity, SwitchEntity):
         return self.virtual_data.get("active", False)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the virtual on."""
+        """Turn the virtual on, re-applying any active color lock."""
         try:
-            # Get last effect or use default
-            last_effect = self.virtual_data.get("last_effect", "gradient")
-            
-            # Get effect config if available
-            effect_config = {}
-            if self.virtual_data.get("effect", {}).get("config"):
-                effect_config = self.virtual_data["effect"]["config"].copy()
-            
-            # Set effect (this activates the virtual)
+            effect_data = self.virtual_data.get("effect", {})
+            last_effect = effect_data.get("type") or self.virtual_data.get("last_effect", "gradient")
+            effect_config = effect_data.get("config", {}).copy()
+
+            # Re-apply locked color if set
+            locked_rgb = self.hass.data[DOMAIN].get(COLOR_LOCKS_KEY, {}).get(self._virtual_id)
+            if locked_rgb:
+                try:
+                    from .ledfx_client import LEDFXClient
+                    effects_data = await self._client.get_effects()
+                    from .light import apply_color_to_config
+                    effect_schema = effects_data.get(last_effect, {})
+                    effect_config = apply_color_to_config(locked_rgb, effect_schema, effect_config)
+                except Exception:
+                    pass
+
             await self._client.set_virtual_effect(self._virtual_id, last_effect, effect_config)
-            
-            # Trigger coordinator refresh
             await self.coordinator.async_request_refresh()
-            
+
         except Exception as err:
             _LOGGER.error("Error turning on virtual %s: %s", self._virtual_id, err)
 
